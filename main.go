@@ -168,8 +168,8 @@ func handlePostAppointment(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 
 	// Validate required fields
-	if appointment.Name == "" || appointment.Email == "" || 
-	   appointment.Date == "" || appointment.Time == "" {
+	if appointment.Name == "" || appointment.Email == "" ||
+		appointment.Date == "" || appointment.Time == "" {
 		handleError(w, "Name, email, date, and time are required", http.StatusBadRequest)
 		return
 	}
@@ -240,7 +240,46 @@ func handleError(w http.ResponseWriter, message string, status int) {
 	})
 }
 
-func main() {
-	http.HandleFunc("/api/appointments", handleAppointments)
-	log.Fatal(http.ListenAndServe(":8080", nil))
+// corsMiddleware wraps a handler to add CORS headers
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Get the allowed origin from an environment variable
+		allowedOrigin := os.Getenv("CORS_ALLOWED_ORIGIN")
+		if allowedOrigin == "" {
+			// Fallback to a default or handle the error if not set
+			// For development, you might use a local URL. For production, this should be your frontend's URL.
+			log.Println("Warning: CORS_ALLOWED_ORIGIN environment variable not set.")
+		}
+
+		// Set CORS headers
+		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		// Handle preflight requests
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		// Call the next handler in the chain
+		next.ServeHTTP(w, r)
+	})
 }
+
+func main() {
+	// Wrap the original handler with the CORS middleware
+	appointmentsHandler := http.HandlerFunc(handleAppointments)
+	http.Handle("/api/appointments", corsMiddleware(appointmentsHandler))
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	log.Printf("Starting server on port %s", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
+}
+
+
+
