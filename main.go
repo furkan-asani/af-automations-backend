@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"time"
+
+	_ "github.com/lib/pq" // PostgreSQL driver
 )
 
 // Constants
@@ -77,8 +80,15 @@ func contains(slice []int, item int) bool {
 func handleAppointments(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// Initialize database connection (you'll need to implement this)
-	db, err := sql.Open("your_db_driver", "your_connection_string")
+	// Get database connection string from environment variable
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		handleError(w, "DATABASE_URL environment variable not set", http.StatusInternalServerError)
+		return
+	}
+
+	// Initialize database connection
+	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		handleError(w, "Database connection error", http.StatusInternalServerError)
 		return

@@ -30,6 +30,9 @@ RUN apk add --no-cache ca-certificates tzdata
 # Copy the binary from builder
 COPY --from=builder /app/main .
 
+# Set DATABASE_URL environment variable (this will be overridden at runtime)
+ENV DATABASE_URL=""
+
 # Expose the port the app runs on
 EXPOSE 8080
 
