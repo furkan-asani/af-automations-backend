@@ -141,6 +141,15 @@ func handleGetAppointments(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			return
 		}
 		// Normalize time format (remove seconds if present)
+		if t == "" {
+			handleError(w, "Time of booked appointment was empty", http.StatusInternalServerError)
+		}
+		splittedString := strings.Split(t, "T")
+		if len(splittedString) != 2 {
+			handleError(w, "Time string was not in correct format with a T as a separator. Please clean the data!", http.StatusInternalServerError)
+		}
+		t = splittedString[1]
+
 		if len(t) > 5 {
 			t = t[:5]
 		}
