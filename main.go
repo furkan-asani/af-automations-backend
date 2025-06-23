@@ -49,6 +49,11 @@ type AppointmentResponse struct {
 	Appointment Appointment `json:"appointment,omitempty"`
 }
 
+type ContactRequest struct {
+	FullName string `json:"fullName"`
+	Email    string `json:"email"`
+}
+
 // generateTimeSlots generates available time slots from 9:00 to 17:00
 func generateTimeSlots() []string {
 	var slots []string
@@ -242,6 +247,67 @@ func handlePostAppointment(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	})
 }
 
+func handleContacts(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Get database connection string from environment variable
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		handleError(w, "DATABASE_URL environment variable not set", http.StatusInternalServerError)
+		return
+	}
+
+	// Initialize database connection
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		handleError(w, "Database connection error", http.StatusInternalServerError)
+		return
+	}
+	defer db.Close()
+
+	if r.Method != http.MethodPost {
+		handleError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var contact ContactRequest
+	if err := json.NewDecoder(r.Body).Decode(&contact); err != nil {
+		handleError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if contact.FullName == "" || contact.Email == "" {
+		handleError(w, "Full name and email are required", http.StatusBadRequest)
+		return
+	}
+
+	// Email validation
+	emailRegex := regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
+	if !emailRegex.MatchString(contact.Email) {
+		handleError(w, "Invalid email format", http.StatusBadRequest)
+		return
+	}
+
+	_, err = db.Exec(`INSERT INTO contacts (name, email) VALUES ($1, $2) ON CONFLICT (email) DO NOTHING`, contact.FullName, contact.Email)
+	if err != nil {
+		handleError(w, "Error saving contact", http.StatusInternalServerError)
+		return
+	}
+
+	// Send email with PDF attachment
+	if err := SendMail(contact.Email); err != nil {
+		// Log the email error but don't fail the request,
+		// as the contact has already been saved.
+		log.Printf("Failed to send email to %s: %v", contact.Email, err)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Contact received and email sent.",
+	})
+}
+
 func handleError(w http.ResponseWriter, message string, status int) {
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(AppointmentResponse{
@@ -280,6 +346,9 @@ func main() {
 	// Wrap the original handler with the CORS middleware
 	appointmentsHandler := http.HandlerFunc(handleAppointments)
 	http.Handle("/api/appointments", corsMiddleware(appointmentsHandler))
+
+	contactsHandler := http.HandlerFunc(handleContacts)
+	http.Handle("/api/contacts", corsMiddleware(contactsHandler))
 
 	port := os.Getenv("PORT")
 	if port == "" {
