@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -12,6 +11,8 @@ import (
 	"time"
 
 	_ "github.com/lib/pq" // PostgreSQL driver
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 // Constants
@@ -83,6 +84,7 @@ func contains(slice []int, item int) bool {
 }
 
 func handleAppointments(w http.ResponseWriter, r *http.Request) {
+	log.Info().Str("method", r.Method).Str("path", r.URL.Path).Msg("Received request for appointments")
 	w.Header().Set("Content-Type", "application/json")
 
 	// Get database connection string from environment variable
@@ -112,6 +114,7 @@ func handleAppointments(w http.ResponseWriter, r *http.Request) {
 
 func handleGetAppointments(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	date := r.URL.Query().Get("date")
+	log.Info().Str("date", date).Msg("Handling GET appointments request")
 	if date == "" {
 		handleError(w, "Date is required", http.StatusBadRequest)
 		return
@@ -171,12 +174,15 @@ func handleGetAppointments(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		}
 	}
 
+	log.Info().Int("available_slots", len(slotsWithStatus)).Str("date", date).Msg("Successfully retrieved appointment slots")
 	json.NewEncoder(w).Encode(AppointmentResponse{Slots: slotsWithStatus})
 }
 
 func handlePostAppointment(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	var appointment Appointment
+	log.Info().Msg("Handling POST appointment request")
 	if err := json.NewDecoder(r.Body).Decode(&appointment); err != nil {
+		log.Error().Err(err).Msg("Failed to decode request body")
 		handleError(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -235,11 +241,18 @@ func handlePostAppointment(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	).Scan(&id)
 
 	if err != nil {
+		log.Error().Err(err).Msg("Error creating appointment")
 		handleError(w, "Error creating appointment", http.StatusInternalServerError)
 		return
 	}
 
 	appointment.ID = id
+	log.Info().
+		Str("name", appointment.Name).
+		Str("email", appointment.Email).
+		Str("date", appointment.Date).
+		Str("time", appointment.Time).
+		Msg("Appointment booked successfully")
 	json.NewEncoder(w).Encode(AppointmentResponse{
 		Success:     true,
 		Message:     "Appointment booked successfully",
@@ -248,6 +261,7 @@ func handlePostAppointment(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 }
 
 func handleContacts(w http.ResponseWriter, r *http.Request) {
+	log.Info().Str("method", r.Method).Str("path", r.URL.Path).Msg("Received request for contacts")
 	w.Header().Set("Content-Type", "application/json")
 
 	// Get database connection string from environment variable
@@ -272,6 +286,7 @@ func handleContacts(w http.ResponseWriter, r *http.Request) {
 
 	var contact ContactRequest
 	if err := json.NewDecoder(r.Body).Decode(&contact); err != nil {
+		log.Error().Err(err).Msg("Failed to decode contact request body")
 		handleError(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -288,20 +303,23 @@ func handleContacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = db.Exec(`INSERT INTO contacts (name, email) VALUES ($1, $2) ON CONFLICT (email) DO NOTHING`, contact.FullName, contact.Email)
+	_, err = db.Exec(`INSERT INTO contacts (name, email) VALUES ($1, $2)`, contact.FullName, contact.Email)
 	if err != nil {
+		log.Error().Err(err).Str("email", contact.Email).Msg("Error saving contact")
 		handleError(w, "Error saving contact", http.StatusInternalServerError)
 		return
 	}
+	log.Info().Str("email", contact.Email).Msg("Contact saved successfully")
 
 	// Send email with PDF attachment
-	if err := SendMail(contact.Email); err != nil {
+	if err := SendMail(contact.Email, contact.FullName); err != nil {
 		// Log the email error but don't fail the request,
 		// as the contact has already been saved.
-		log.Printf("Failed to send email to %s: %v", contact.Email, err)
+		log.Error().Err(err).Str("email", contact.Email).Msg("Failed to send contact email")
 	}
 
 	w.WriteHeader(http.StatusOK)
+	log.Info().Str("email", contact.Email).Msg("Contact request processed successfully")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"message": "Contact received and email sent.",
@@ -309,6 +327,7 @@ func handleContacts(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleError(w http.ResponseWriter, message string, status int) {
+	log.Error().Int("status", status).Msg(message)
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(AppointmentResponse{
 		Error: message,
@@ -323,7 +342,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 		if allowedOrigin == "" {
 			// Fallback to a default or handle the error if not set
 			// For development, you might use a local URL. For production, this should be your frontend's URL.
-			log.Println("Warning: CORS_ALLOWED_ORIGIN environment variable not set.")
+			log.Warn().Msg("CORS_ALLOWED_ORIGIN environment variable not set.")
 		}
 
 		// Set CORS headers
@@ -343,6 +362,11 @@ func corsMiddleware(next http.Handler) http.Handler {
 }
 
 func main() {
+	// Initialize logger
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+	// Pretty logging for development
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
+
 	// Wrap the original handler with the CORS middleware
 	appointmentsHandler := http.HandlerFunc(handleAppointments)
 	http.Handle("/api/appointments", corsMiddleware(appointmentsHandler))
@@ -355,8 +379,10 @@ func main() {
 		port = "8080"
 	}
 
-	log.Printf("Starting server on port %s", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	log.Info().Str("port", port).Msg("Starting server")
+	if err := http.ListenAndServe(":"+port, nil); err != nil {
+		log.Fatal().Err(err).Msg("Server failed to start")
+	}
 }
 
 
